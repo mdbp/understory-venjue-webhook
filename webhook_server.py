@@ -21,7 +21,7 @@ app = Flask(__name__)
 # KONFIGURATION
 # ============================================================
 
-# Understory API - OPDATERET MED KORREKT AUTH ENDPOINT!
+# Understory API credentials
 UNDERSTORY_CLIENT_ID = os.getenv("UNDERSTORY_CLIENT_ID", "8850e110974049358f0f2d183c18d216-e8703e5dba8d465e9eeb17807372b663")
 UNDERSTORY_CLIENT_SECRET = os.getenv("UNDERSTORY_CLIENT_SECRET", "Ba5c1ld6oYXVolsPBlC1AKUeUB")
 
@@ -36,8 +36,8 @@ CUSTOMER_DEFAULTS = {
     "phone": os.getenv("CUSTOMER_PHONE", "56 79 12 12")
 }
 
-# API endpoints - OPDATERET!
-UNDERSTORY_AUTH_URL = "https://api.auth.understory.io/oauth2/token"  # ← ÆNDRET!
+# API endpoints
+UNDERSTORY_AUTH_URL = "https://api.auth.understory.io/oauth2/token"
 UNDERSTORY_BASE_URL = "https://api.understory.io"
 VENJUE_BASE_URL = "https://app.venjue.com/api/v1"
 
@@ -72,8 +72,8 @@ def get_understory_access_token():
         "grant_type": "client_credentials",
         "client_id": UNDERSTORY_CLIENT_ID,
         "client_secret": UNDERSTORY_CLIENT_SECRET,
-        "audience": "https://api.understory.io",  # ← TILFØJET!
-        "scope": "openid"  # ← VIRKER! (events.read virker ikke)
+        "audience": "https://api.understory.io",
+        "scope": "openid event.read"  # ← Med event.read scope!
     }
     
     headers = {
