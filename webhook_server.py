@@ -1,6 +1,6 @@
 """
-UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - CAPACITY FIX!
-====================================================================
+UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - WORKING VERSION!
+========================================================================
 
 Flask webhook server som modtager Understory events og synkroniserer
 dem til Venjue bookings med real-time opdatering af antal solgte pladser.
@@ -28,14 +28,6 @@ UNDERSTORY_CLIENT_SECRET = os.getenv("UNDERSTORY_CLIENT_SECRET", "Ba5c1ld6oYXVol
 
 # Venjue API
 VENJUE_ACCESS_TOKEN = os.getenv("VENJUE_ACCESS_TOKEN", "70f6b33cc35f786c8ad82cf94ef1fc86")
-
-# Standard kundeoplysninger for bookings
-CUSTOMER_DEFAULTS = {
-    "firstName": os.getenv("CUSTOMER_FIRST_NAME", "Braunstein"),
-    "lastName": os.getenv("CUSTOMER_LAST_NAME", "Event"),
-    "email": os.getenv("CUSTOMER_EMAIL", "events@braunstein.dk"),
-    "phone": os.getenv("CUSTOMER_PHONE", "56 79 12 12")
-}
 
 # API endpoints
 UNDERSTORY_AUTH_URL = "https://api.auth.understory.io/oauth2/token"
@@ -92,7 +84,7 @@ def get_understory_access_token():
         
         # Cache token
         _token_cache["access_token"] = access_token
-        _token_cache["expires_at"] = datetime.now().timestamp() + expires_in - 60  # 1 min buffer
+        _token_cache["expires_at"] = datetime.now().timestamp() + expires_in - 60
         
         return access_token
         
@@ -129,6 +121,8 @@ def get_event_from_understory(event_id):
 def create_venjue_booking(event_data):
     """
     Opret booking i Venjue baseret på Understory event data.
+    
+    Venjue accepterer KUN: date, time, pax
     """
     # Parse dato og tid
     try:
@@ -142,32 +136,11 @@ def create_venjue_booking(event_data):
     # Antal solgte
     booked_spots = event_data.get("bookedSpots", 0)
     
-    # Kapacitet - kan være enten et tal eller et objekt med {total, reserved}
-    capacity_data = event_data.get("capacity", 50)
-    if isinstance(capacity_data, dict):
-        capacity = capacity_data.get("total", 50)
-    else:
-        capacity = capacity_data
-    
-    # Status label
-    if event_data.get("status") == "cancelled":
-        status_label = "🚫 AFLYST"
-    elif booked_spots >= capacity:
-        status_label = "✅ UDSOLGT"
-    else:
-        status_label = f"📊 {booked_spots}/{capacity} solgt"
-    
-    # Booking payload
+    # Booking payload - KUN date, time, pax!
     payload = {
         "date": date,
         "time": time,
-        "pax": booked_spots,
-        "duration": "120",
-        "firstName": CUSTOMER_DEFAULTS["firstName"],
-        "lastName": CUSTOMER_DEFAULTS["lastName"],
-        "email": CUSTOMER_DEFAULTS["email"],
-        "phone": CUSTOMER_DEFAULTS["phone"],
-        "notes": f"{event_data.get('title', 'Event')}\n\n{status_label}\n\nUnderstory Event ID: {event_data.get('id')}"
+        "pax": booked_spots
     }
     
     headers = {
@@ -176,6 +149,8 @@ def create_venjue_booking(event_data):
     }
     
     url = f"{VENJUE_BASE_URL}/booking"
+    
+    print(f"  → Sender til Venjue: {payload}")
     
     try:
         response = requests.post(url, json=payload, headers=headers)
@@ -186,6 +161,9 @@ def create_venjue_booking(event_data):
         return booking_id
         
     except requests.exceptions.RequestException as e:
+        print(f"✗ VENJUE API FEJL: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"  Response: {e.response.text}")
         raise Exception(f"Kunne ikke oprette Venjue booking: {str(e)}")
 
 
@@ -194,8 +172,6 @@ def update_venjue_booking(booking_id, event_data):
     Opdater eksisterende Venjue booking.
     
     Note: Venjue har ikke PUT /booking/{id} endpoint endnu.
-    Denne funktion logger opdateringen og kan implementeres
-    når Venjue tilføjer update funktionalitet.
     """
     booked_spots = event_data.get("bookedSpots", 0)
     
@@ -357,17 +333,10 @@ def understory_webhook():
         # Parse webhook payload
         payload = request.get_json()
         
-        # ===== DEBUG: LOG PAYLOAD =====
-        print("=" * 60)
-        print("🔍 WEBHOOK PAYLOAD:")
-        print(json.dumps(payload, indent=2))
-        print("=" * 60)
-        # ==============================
-        
         webhook_type = payload.get("type")
         webhook_payload = payload.get("payload", {})
         
-        # KORREKT PARSING: event_id er i payload.event_id!
+        # event_id er i payload.event_id
         event_id = webhook_payload.get("event_id")
         
         print("=" * 60)
