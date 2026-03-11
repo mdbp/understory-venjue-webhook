@@ -1,6 +1,6 @@
 """
-UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - DEBUG VERSION
-=====================================================================
+UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - FIXED!
+==============================================================
 
 Flask webhook server som modtager Understory events og synkroniserer
 dem til Venjue bookings med real-time opdatering af antal solgte pladser.
@@ -236,13 +236,11 @@ def get_all_mappings():
 # WEBHOOK HANDLERS
 # ============================================================
 
-def handle_event_created(event_data):
+def handle_event_created(event_id):
     """
     Håndter v1.event.created webhook.
     Opret ny booking i Venjue.
     """
-    event_id = event_data.get("id")
-    
     print(f"Henter event detaljer fra Understory...")
     full_event = get_event_from_understory(event_id)
     
@@ -271,13 +269,11 @@ def handle_event_created(event_data):
     }
 
 
-def handle_event_updated(event_data):
+def handle_event_updated(event_id):
     """
     Håndter v1.event.updated webhook.
     Opdater eksisterende booking i Venjue.
     """
-    event_id = event_data.get("id")
-    
     # Check om vi har en mapping
     booking_id = get_mapping(event_id)
     
@@ -320,34 +316,55 @@ def handle_event_updated(event_data):
 def understory_webhook():
     """
     Hovedendpoint for Understory webhooks.
+    
+    Understory payload struktur:
+    {
+      "id": "webhook-id",
+      "payload": {
+        "event_id": "abc123",
+        "experience_id": "xyz789",
+        "session_ids": [...]
+      },
+      "type": "v1.event.created",
+      "timestamp": "..."
+    }
     """
     try:
         # Parse webhook payload
         payload = request.get_json()
         
-        # ===== DEBUG: LOG HELE PAYLOAD =====
+        # ===== DEBUG: LOG PAYLOAD =====
         print("=" * 60)
-        print("🔍 DEBUG: FULD WEBHOOK PAYLOAD")
-        print("=" * 60)
+        print("🔍 WEBHOOK PAYLOAD:")
         print(json.dumps(payload, indent=2))
         print("=" * 60)
-        # ===================================
+        # ==============================
         
         webhook_type = payload.get("type")
-        event_data = payload.get("data", {})
+        webhook_payload = payload.get("payload", {})
+        
+        # KORREKT PARSING: event_id er i payload.event_id!
+        event_id = webhook_payload.get("event_id")
         
         print("=" * 60)
         print(f"WEBHOOK MODTAGET: {webhook_type}")
-        print(f"Event ID: {event_data.get('id')}")
+        print(f"Event ID: {event_id}")
         print("=" * 60)
+        
+        if not event_id:
+            print("⚠ ADVARSEL: Ingen event_id i payload!")
+            return jsonify({
+                "status": "error",
+                "error": "Missing event_id in payload"
+            }), 400
         
         # Route til korrekt handler
         if webhook_type == "v1.event.created":
-            result = handle_event_created(event_data)
+            result = handle_event_created(event_id)
         elif webhook_type == "v1.event.updated":
-            result = handle_event_updated(event_data)
+            result = handle_event_updated(event_id)
         elif webhook_type == "v1.event.cancelled":
-            result = handle_event_updated(event_data)
+            result = handle_event_updated(event_id)
         else:
             result = {
                 "status": "ignored",
@@ -361,6 +378,8 @@ def understory_webhook():
         
     except Exception as e:
         print(f"✗ FEJL: {str(e)}")
+        import traceback
+        traceback.print_exc()
         print("=" * 60)
         print()
         
