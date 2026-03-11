@@ -1,6 +1,6 @@
 """
-UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync)
-======================================================
+UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - DEBUG VERSION
+=====================================================================
 
 Flask webhook server som modtager Understory events og synkroniserer
 dem til Venjue bookings med real-time opdatering af antal solgte pladser.
@@ -13,6 +13,7 @@ from datetime import datetime
 import requests
 import shelve
 import os
+import json
 from dateutil import parser
 
 app = Flask(__name__)
@@ -73,7 +74,7 @@ def get_understory_access_token():
         "client_id": UNDERSTORY_CLIENT_ID,
         "client_secret": UNDERSTORY_CLIENT_SECRET,
         "audience": "https://api.understory.io",
-        "scope": "openid event.read"  # ← Med event.read scope!
+        "scope": "openid event.read"
     }
     
     headers = {
@@ -206,13 +207,6 @@ def update_venjue_booking(booking_id, event_data):
     print(f"  - Status: {status_label}")
     print(f"  - Note: Venjue har ikke update endpoint endnu")
     
-    # Når Venjue tilføjer PUT /booking/{id} endpoint:
-    # payload = {
-    #     "pax": booked_spots,
-    #     "notes": f"...\n\n{status_label}\n..."
-    # }
-    # response = requests.put(f"{VENJUE_BASE_URL}/booking/{booking_id}", json=payload, headers=headers)
-    
     return True
 
 
@@ -331,6 +325,14 @@ def understory_webhook():
         # Parse webhook payload
         payload = request.get_json()
         
+        # ===== DEBUG: LOG HELE PAYLOAD =====
+        print("=" * 60)
+        print("🔍 DEBUG: FULD WEBHOOK PAYLOAD")
+        print("=" * 60)
+        print(json.dumps(payload, indent=2))
+        print("=" * 60)
+        # ===================================
+        
         webhook_type = payload.get("type")
         event_data = payload.get("data", {})
         
@@ -345,8 +347,7 @@ def understory_webhook():
         elif webhook_type == "v1.event.updated":
             result = handle_event_updated(event_data)
         elif webhook_type == "v1.event.cancelled":
-            # Håndter aflysning
-            result = handle_event_updated(event_data)  # Opdater med cancelled status
+            result = handle_event_updated(event_data)
         else:
             result = {
                 "status": "ignored",
@@ -414,8 +415,6 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     
     # Start Flask server
-    # For produktion: brug gunicorn (se Procfile)
-    # For lokal udvikling: brug denne
     app.run(
         host='0.0.0.0',
         port=port,
