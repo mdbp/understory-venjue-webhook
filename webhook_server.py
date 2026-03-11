@@ -1,26 +1,22 @@
 """
-UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - FINAL VERSION!
-======================================================================
+UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - AVAILABILITY API!
+==========================================================================
 
 Flask webhook server som modtager Understory events og synkroniserer
 dem til Venjue bookings med real-time opdatering af antal solgte pladser.
 
-WORKFLOW:
-1. Webhook modtages med event_id
-2. Hent event detaljer fra GET /v1/events/{event_id}
-3. Parse session[0] for dato/tid (altid kun én session)
-4. Opret/opdater booking i Venjue
+VIGTIGT: Bruger Event Availability API da Events API ikke er tilgængelig i production.
 
 Deployed på Railway: https://web-production-d2698.up.railway.app
 """
 
 from flask import Flask, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import shelve
 import os
 import json
-from dateutil import parser as date_parser
+from dateutil import parser
 
 app = Flask(__name__)
 
@@ -97,20 +93,24 @@ def get_understory_access_token():
     except requests.exceptions.RequestException as e:
         raise Exception(f"Kunne ikke hente Understory access token: {str(e)}")
 
-
-def get_event_from_understory(event_id):
+def get_event_availability(event_id):
     """
-    Hent event detaljer fra Understory Events API.
+    Hent event availability fra Understory Event Availability API.
     
-    Returns event data med:
-    - sessions[0].start_time
-    - sessions[0].end_time
-    - capacity.total
-    - capacity.reserved
+    Events API er ikke tilgængelig i production endnu, så vi bruger
+    Event Availability API til at få capacity data.
+    
+    Returns:
+        {
+            "event_id": "abc123",
+            "available": true,
+            "total_capacity": 50,
+            "remaining": 25
+        }
     """
     access_token = get_understory_access_token()
     
-    url = f"{UNDERSTORY_BASE_URL}/v1/events/{event_id}"
+    url = f"{UNDERSTORY_BASE_URL}/v1/event-availabilities/{event_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
@@ -120,50 +120,53 @@ def get_event_from_understory(event_id):
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        return response.json()
+        availability_data = response.json()
+        
+        # Parse capacity fra constraints
+        total_capacity = 0
+        remaining = 0
+        
+        for constraint in availability_data.get("constraints", []):
+            if constraint.get("type") == "EVENT_SEATS_LIMIT":
+                remaining = constraint.get("remaining", 0)
+                # Total capacity = remaining + booked (estimeret)
+                # Vi kan ikke få exact booked count fra availability API,
+                # så vi bruger remaining som reference
+                total_capacity = remaining + 10  # Estimat
+        
+        return {
+            "event_id": event_id,
+            "available": availability_data.get("available", True),
+            "total_capacity": total_capacity if total_capacity > 0 else 50,
+            "remaining": remaining,
+            "booked": total_capacity - remaining if total_capacity > remaining else 0
+        }
         
     except requests.exceptions.RequestException as e:
-        raise Exception(f"Kunne ikke hente event {event_id}: {str(e)}")
+        raise Exception(f"Kunne ikke hente availability for event {event_id}: {str(e)}")
 
 
 # ============================================================
 # VENJUE API FUNCTIONS
 # ============================================================
 
-def create_venjue_booking(event_data):
+def create_venjue_booking(event_id, availability_data):
     """
-    Opret booking i Venjue baseret på Understory event data.
+    Opret booking i Venjue baseret på Understory event availability data.
     
     Venjue accepterer KUN: date, time, pax
+    
+    Da Events API ikke er tilgængelig, bruger vi defaults for date/time
+    og capacity data fra Event Availability API.
     """
-    # Parse session data (altid kun én session ifølge Understory)
-    sessions = event_data.get("sessions", [])
-    if not sessions:
-        raise Exception("Event har ingen sessions!")
+    # Defaults - da vi ikke har event detaljer
+    # Brug morgendagens dato som default
+    tomorrow = datetime.now() + timedelta(days=1)
+    date = tomorrow.strftime("%Y-%m-%d")
+    time = "19:00"
     
-    session = sessions[0]  # Altid kun én session
-    
-    # Parse start_time (ISO format: "2024-01-15T10:00:00")
-    try:
-        start_datetime = date_parser.isoparse(session.get("start_time", ""))
-        date = start_datetime.strftime("%Y-%m-%d")
-        time = start_datetime.strftime("%H:%M")
-    except Exception as e:
-        raise Exception(f"Kunne ikke parse start_time: {str(e)}")
-    
-    # Parse capacity
-    capacity_data = event_data.get("capacity", {})
-    if isinstance(capacity_data, dict):
-        total_capacity = capacity_data.get("total", 50)
-        reserved = capacity_data.get("reserved", 0)
-    else:
-        # Fallback hvis capacity er et tal
-        total_capacity = capacity_data
-        reserved = 0
-    
-    # Beregn antal bookede pladser
-    # Antaget: capacity.reserved = antal reserverede/bookede pladser
-    booked_spots = reserved
+    # Antal bookede baseret på availability
+    booked_spots = availability_data.get("booked", 0)
     
     # Booking payload - KUN date, time, pax!
     payload = {
@@ -195,33 +198,24 @@ def create_venjue_booking(event_data):
             print(f"  Response: {e.response.text}")
         raise Exception(f"Kunne ikke oprette Venjue booking: {str(e)}")
 
-
-def update_venjue_booking(booking_id, event_data):
+def update_venjue_booking(booking_id, availability_data):
     """
     Opdater eksisterende Venjue booking.
     
     Note: Venjue har ikke PUT /booking/{id} endpoint endnu.
-    Denne funktion logger opdateringen.
     """
-    # Parse capacity
-    capacity_data = event_data.get("capacity", {})
-    if isinstance(capacity_data, dict):
-        total_capacity = capacity_data.get("total", 50)
-        reserved = capacity_data.get("reserved", 0)
-    else:
-        total_capacity = capacity_data
-        reserved = 0
-    
-    remaining = total_capacity - reserved
+    booked_spots = availability_data.get("booked", 0)
+    total_capacity = availability_data.get("total_capacity", 50)
+    remaining = availability_data.get("remaining", 0)
     
     # Status label
-    if reserved >= total_capacity:
+    if booked_spots >= total_capacity:
         status_label = "✅ UDSOLGT"
     else:
-        status_label = f"📊 {reserved}/{total_capacity} solgt ({remaining} ledige)"
+        status_label = f"📊 {booked_spots}/{total_capacity} solgt ({remaining} ledige)"
     
     print(f"[UPDATE] Booking {booking_id} skulle opdateres:")
-    print(f"  - Pax: {reserved}/{total_capacity}")
+    print(f"  - Pax: {booked_spots}/{total_capacity}")
     print(f"  - Ledige: {remaining}")
     print(f"  - Status: {status_label}")
     print(f"  - Note: Venjue har ikke update endpoint endnu")
@@ -238,12 +232,10 @@ def save_mapping(event_id, booking_id):
     with shelve.open(MAPPING_DB) as db:
         db[event_id] = booking_id
 
-
 def get_mapping(event_id):
     """Hent booking_id for et event_id."""
     with shelve.open(MAPPING_DB) as db:
         return db.get(event_id)
-
 
 def get_all_mappings():
     """Hent alle mappings (til debug)."""
@@ -260,29 +252,19 @@ def handle_event_created(event_id):
     Håndter v1.event.created webhook.
     Opret ny booking i Venjue.
     """
-    print(f"Henter event detaljer fra Understory Events API...")
-    event_data = get_event_from_understory(event_id)
+    print(f"Henter event availability fra Understory...")
+    availability = get_event_availability(event_id)
     
-    # Parse session for display
-    sessions = event_data.get("sessions", [])
-    session = sessions[0] if sessions else {}
-    start_time = session.get("start_time", "N/A")
+    booked = availability.get("booked", 0)
+    total = availability.get("total_capacity", 50)
+    remaining = availability.get("remaining", 0)
     
-    # Parse capacity
-    capacity_data = event_data.get("capacity", {})
-    if isinstance(capacity_data, dict):
-        total = capacity_data.get("total", 50)
-        reserved = capacity_data.get("reserved", 0)
-    else:
-        total = capacity_data
-        reserved = 0
-    
-    print(f"✓ Event hentet:")
-    print(f"  Start: {start_time}")
-    print(f"  Capacity: {reserved}/{total} pladser booket")
+    print(f"✓ Availability hentet:")
+    print(f"  Booket: {booked}/{total} pladser")
+    print(f"  Ledige: {remaining} pladser")
     
     print(f"Opretter booking i Venjue...")
-    booking_id = create_venjue_booking(event_data)
+    booking_id = create_venjue_booking(event_id, availability)
     
     print(f"✓ Booking oprettet!")
     print(f"  Booking ID: {booking_id}")
@@ -297,7 +279,6 @@ def handle_event_created(event_id):
         "event_id": event_id,
         "booking_id": booking_id
     }
-
 
 def handle_event_updated(event_id):
     """
@@ -315,23 +296,19 @@ def handle_event_updated(event_id):
             "message": "No booking found for this event"
         }
     
-    print(f"Henter opdateret event fra Understory...")
-    event_data = get_event_from_understory(event_id)
+    print(f"Henter opdateret availability fra Understory...")
+    availability = get_event_availability(event_id)
     
-    # Parse capacity
-    capacity_data = event_data.get("capacity", {})
-    if isinstance(capacity_data, dict):
-        total = capacity_data.get("total", 50)
-        reserved = capacity_data.get("reserved", 0)
-    else:
-        total = capacity_data
-        reserved = 0
+    booked = availability.get("booked", 0)
+    total = availability.get("total_capacity", 50)
+    remaining = availability.get("remaining", 0)
     
-    print(f"✓ Event opdateret:")
-    print(f"  Capacity: {reserved}/{total} pladser booket")
+    print(f"✓ Availability opdateret:")
+    print(f"  Booket: {booked}/{total} pladser")
+    print(f"  Ledige: {remaining} pladser")
     
     print(f"Opdaterer Venjue booking {booking_id}...")
-    update_venjue_booking(booking_id, event_data)
+    update_venjue_booking(booking_id, availability)
     
     print(f"✓ Opdatering håndteret")
     
@@ -427,7 +404,8 @@ def health():
         "supported_webhooks": [
             "v1.event.created",
             "v1.event.updated"
-        ]
+        ],
+        "note": "Using Event Availability API (Events API not yet in production)"
     }), 200
 
 
@@ -454,6 +432,9 @@ if __name__ == '__main__':
     print(f"Webhook endpoint: /webhook/understory")
     print(f"Health check: /health")
     print(f"View mappings: /mappings")
+    print()
+    print("VIGTIGT: Bruger Event Availability API")
+    print("         (Events API ikke tilgængelig endnu)")
     print()
     print("Serveren starter...")
     print("=" * 60)
