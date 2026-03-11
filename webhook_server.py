@@ -1,6 +1,6 @@
 """
-UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - FIXED!
-==============================================================
+UNDERSTORY → VENJUE WEBHOOK SERVER (Real-time Sync) - CAPACITY FIX!
+====================================================================
 
 Flask webhook server som modtager Understory events og synkroniserer
 dem til Venjue bookings med real-time opdatering af antal solgte pladser.
@@ -139,9 +139,15 @@ def create_venjue_booking(event_data):
         date = datetime.now().strftime("%Y-%m-%d")
         time = "19:00"
     
-    # Antal solgte og kapacitet
+    # Antal solgte
     booked_spots = event_data.get("bookedSpots", 0)
-    capacity = event_data.get("capacity", 50)
+    
+    # Kapacitet - kan være enten et tal eller et objekt med {total, reserved}
+    capacity_data = event_data.get("capacity", 50)
+    if isinstance(capacity_data, dict):
+        capacity = capacity_data.get("total", 50)
+    else:
+        capacity = capacity_data
     
     # Status label
     if event_data.get("status") == "cancelled":
@@ -192,7 +198,13 @@ def update_venjue_booking(booking_id, event_data):
     når Venjue tilføjer update funktionalitet.
     """
     booked_spots = event_data.get("bookedSpots", 0)
-    capacity = event_data.get("capacity", 50)
+    
+    # Kapacitet - kan være enten et tal eller et objekt
+    capacity_data = event_data.get("capacity", 50)
+    if isinstance(capacity_data, dict):
+        capacity = capacity_data.get("total", 50)
+    else:
+        capacity = capacity_data
     
     # Status label
     if event_data.get("status") == "cancelled":
@@ -246,7 +258,13 @@ def handle_event_created(event_id):
     
     title = full_event.get("title", "Untitled Event")
     booked_spots = full_event.get("bookedSpots", 0)
-    capacity = full_event.get("capacity", 50)
+    
+    # Parse capacity
+    capacity_data = full_event.get("capacity", 50)
+    if isinstance(capacity_data, dict):
+        capacity = capacity_data.get("total", 50)
+    else:
+        capacity = capacity_data
     
     print(f"✓ Event hentet: {title}")
     print(f"  Solgt: {booked_spots}/{capacity} pladser")
@@ -290,7 +308,13 @@ def handle_event_updated(event_id):
     
     title = full_event.get("title", "Untitled Event")
     booked_spots = full_event.get("bookedSpots", 0)
-    capacity = full_event.get("capacity", 50)
+    
+    # Parse capacity
+    capacity_data = full_event.get("capacity", 50)
+    if isinstance(capacity_data, dict):
+        capacity = capacity_data.get("total", 50)
+    else:
+        capacity = capacity_data
     
     print(f"✓ Event opdateret: {title}")
     print(f"  Solgt: {booked_spots}/{capacity} pladser")
