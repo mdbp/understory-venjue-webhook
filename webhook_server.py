@@ -165,7 +165,7 @@ def extract_venjue_data(event_data):
         "time": time_hh_mm,     # "10:00"
         "pax": available_seats,  # integer
         "title": "Braunstein Event",
-        "customer": CUSTOMER_EMAIL
+        "customer": {"email": CUSTOMER_EMAIL, "name": "Braunstein Event", "phone": "56 79 12 12"}
     }
 
 
