@@ -166,7 +166,9 @@ def extract_venjue_data(event_data):
     return {
         "date": date_danish,      # "DD-MM-YYYY" Danish format
         "time": time_hh_mm,     # "10:00"
-        "pax": available_seats  # integer
+        "pax": available_seats,  # integer
+        "title": "Braunstein Event",
+        "customer": CUSTOMER_EMAIL
     }
 
 
