@@ -1,19 +1,21 @@
 """
-UNDERSTORY → VENJUE WEBHOOK SERVER - WORKAROUND VERSION!
-==========================================================
+UNDERSTORY → VENJUE WEBHOOK SERVER - PRODUCTION VERSION
+========================================================
 
-VIGTIGT: Understory APIs virker ikke (404), så vi bruger defaults.
-
-Flask webhook server som modtager Understory events og synkroniserer
+Flask webhook server der modtager Understory events og synkroniserer
 dem til Venjue bookings.
 
-WORKAROUND: Opretter bookings med default dato/tid uden at hente fra Understory.
+KORREKT IMPLEMENTATION baseret på Understory API dokumentation:
+- OAuth scope: event.read
+- Required headers: Accept, User-Agent
+- Sessions parsing: start_time/end_time (local time, no timezone)
+- Capacity: total - reserved
 
 Deployed på Railway: https://web-production-d2698.up.railway.app
 """
 
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import shelve
 import os
@@ -25,15 +27,16 @@ app = Flask(__name__)
 # KONFIGURATION
 # ============================================================
 
-# Understory API credentials (bruges kun til OAuth2)
+# Understory API credentials
 UNDERSTORY_CLIENT_ID = os.getenv("UNDERSTORY_CLIENT_ID", "8850e110974049358f0f2d183c18d216-e8703e5dba8d465e9eeb17807372b663")
 UNDERSTORY_CLIENT_SECRET = os.getenv("UNDERSTORY_CLIENT_SECRET", "Ba5c1ld6oYXVolsPBlC1AKUeUB")
 
 # Venjue API
 VENJUE_ACCESS_TOKEN = os.getenv("VENJUE_ACCESS_TOKEN", "70f6b33cc35f786c8ad82cf94ef1fc86")
-
-# API endpoints
 VENJUE_BASE_URL = "https://app.venjue.com/api/v1"
+
+# Default customer info
+CUSTOMER_EMAIL = os.getenv("CUSTOMER_EMAIL", "events@braunstein.dk")
 
 # Mapping database - brug persistent storage hvis tilgængelig (Railway)
 if os.path.exists("/app/data"):
@@ -43,14 +46,135 @@ else:
 
 
 # ============================================================
+# UNDERSTORY API FUNCTIONS
+# ============================================================
+
+def get_understory_token():
+    """
+    Hent OAuth2 access token fra Understory.
+    
+    KORREKT IMPLEMENTATION ifølge docs:
+    - Scope: event.read (UDEN openid)
+    - User-Agent header REQUIRED
+    """
+    auth_url = "https://api.auth.understory.io/oauth2/token"
+    
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": UNDERSTORY_CLIENT_ID,
+        "client_secret": UNDERSTORY_CLIENT_SECRET,
+        "audience": "https://api.understory.io",
+        "scope": "event.read"  # ← Korrekt scope ifølge docs
+    }
+    
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Braunstein-Venjue-Integration/1.0"  # ← REQUIRED!
+    }
+    
+    response = requests.post(auth_url, data=data, headers=headers)
+    response.raise_for_status()
+    
+    token_data = response.json()
+    return token_data["access_token"]
+
+
+def get_event_data(event_id):
+    """
+    Hent event data fra Understory API.
+    
+    KORREKT IMPLEMENTATION ifølge docs:
+    - Accept header REQUIRED
+    - User-Agent header REQUIRED
+    - Returns event med sessions array
+    """
+    # Get fresh token
+    access_token = get_understory_token()
+    
+    # API endpoint
+    api_url = f"https://api.understory.io/v1/events/{event_id}"
+    
+    # Headers - ALLE required ifølge docs!
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",  # ← REQUIRED!
+        "User-Agent": "Braunstein-Venjue-Integration/1.0"  # ← REQUIRED!
+    }
+    
+    print(f"  → Kalder Understory API: {api_url}")
+    
+    # Make request
+    response = requests.get(api_url, headers=headers)
+    
+    # Handle specific errors
+    if response.status_code == 403:
+        raise Exception("Forbidden - check OAuth scopes and permissions")
+    elif response.status_code == 404:
+        # Check if it's a deleted event
+        try:
+            error_data = response.json()
+            if "deleted" in error_data.get("message", "").lower():
+                raise Exception(f"Event {event_id} has been deleted in Understory")
+        except:
+            pass
+        raise Exception(f"Event {event_id} not found")
+    
+    response.raise_for_status()
+    
+    return response.json()
+
+
+def extract_venjue_data(event_data):
+    """
+    Extract date, time, pax fra Understory event data.
+    
+    KORREKT PARSING ifølge docs:
+    - sessions[0].start_time: "2024-01-15T10:00:00" (LOCAL time, no timezone)
+    - capacity.total - capacity.reserved = available seats
+    
+    Args:
+        event_data: Response from GET /v1/events/{eventId}
+        
+    Returns:
+        dict: {date, time, pax} for Venjue API
+    """
+    # Get first session (der er altid præcis én session ifølge Michael)
+    if not event_data.get("sessions"):
+        raise Exception("Event has no sessions")
+    
+    session = event_data["sessions"][0]
+    
+    # Parse start_time (LOCAL time uden timezone!)
+    # Format fra API: "2024-01-15T10:00:00"
+    start_time = session["start_time"]  # String: "YYYY-MM-DDTHH:MM:SS"
+    
+    # Split til date og time
+    date_part, time_part = start_time.split("T")  # "2024-01-15", "10:00:00"
+    
+    # Extract time without seconds
+    time_hh_mm = time_part[:5]  # "10:00"
+    
+    # Get capacity (available seats = total - reserved)
+    capacity_total = event_data["capacity"]["total"]
+    capacity_reserved = event_data["capacity"]["reserved"]
+    available_seats = capacity_total - capacity_reserved
+    
+    return {
+        "date": date_part,      # "2024-01-15"
+        "time": time_hh_mm,     # "10:00"
+        "pax": available_seats  # integer
+    }
+
+
+# ============================================================
 # VENJUE API FUNCTIONS
 # ============================================================
 
-def create_venjue_booking_direct(payload):
+def create_venjue_booking(payload):
     """
-    Opret booking direkte i Venjue med payload.
+    Opret booking i Venjue.
     
-    Payload format: {"date": "2026-03-12", "time": "19:00", "pax": 0}
+    Payload format: {"date": "2026-03-12", "time": "19:00", "pax": 20}
     """
     headers = {
         "Authorization": f"Bearer {VENJUE_ACCESS_TOKEN}",
@@ -85,10 +209,12 @@ def save_mapping(event_id, booking_id):
     with shelve.open(MAPPING_DB) as db:
         db[event_id] = booking_id
 
+
 def get_mapping(event_id):
     """Hent booking_id for et event_id."""
     with shelve.open(MAPPING_DB) as db:
         return db.get(event_id)
+
 
 def get_all_mappings():
     """Hent alle mappings (til debug)."""
@@ -97,57 +223,62 @@ def get_all_mappings():
 
 
 # ============================================================
-# WEBHOOK HANDLERS - WORKAROUND VERSION
+# WEBHOOK HANDLERS
 # ============================================================
 
 def handle_event_created(event_id):
     """
     Håndter v1.event.created webhook.
     
-    WORKAROUND: Understory APIs virker ikke (404), så vi opretter
-    booking med default værdier uden at hente fra Understory.
+    KORREKT FLOW:
+    1. Hent event data fra Understory API
+    2. Extract date/time/pax fra sessions array
+    3. Opret booking i Venjue
+    4. Gem mapping
     """
-    print(f"⚠️  WORKAROUND: Opretter booking uden Understory API data")
-    print(f"   Reason: Understory APIs returnerer 404")
+    print(f"Henter event data for: {event_id}")
     
-    # Default booking data
-    tomorrow = datetime.now() + timedelta(days=1)
-    
-    payload = {
-        "date": tomorrow.strftime("%Y-%m-%d"),
-        "time": "19:00",
-        "pax": 0  # Start med 0 bookede - skal opdateres manuelt
-    }
-    
-    print(f"✓ Bruger defaults:")
-    print(f"  Dato: {payload['date']}")
-    print(f"  Tid: {payload['time']}")
-    print(f"  Pax: {payload['pax']}")
-    
-    print(f"Opretter booking i Venjue...")
-    booking_id = create_venjue_booking_direct(payload)
-    
-    print(f"✓ Booking oprettet!")
-    print(f"  Booking ID: {booking_id}")
-    print(f"  URL: {VENJUE_BASE_URL.replace('/api/v1', '')}/booking.php?eventId={booking_id}")
-    print(f"  ⚠️  HUSK: Opdater dato/tid/pax manuelt i Venjue!")
-    
-    # Gem mapping
-    save_mapping(event_id, booking_id)
-    
-    return {
-        "status": "success",
-        "message": "Booking created with defaults (Understory APIs unavailable)",
-        "event_id": event_id,
-        "booking_id": booking_id,
-        "warning": "Update date/time/pax manually in Venjue"
-    }
+    try:
+        # 1. Hent event data fra Understory
+        event_data = get_event_data(event_id)
+        print(f"✓ Event data hentet!")
+        print(f"  State: {event_data['state']}")
+        print(f"  Sessions: {len(event_data['sessions'])}")
+        
+        # 2. Extract Venjue data
+        venjue_payload = extract_venjue_data(event_data)
+        print(f"✓ Venjue payload: {venjue_payload}")
+        
+        # 3. Opret booking i Venjue
+        print(f"Opretter booking i Venjue...")
+        booking_id = create_venjue_booking(venjue_payload)
+        
+        print(f"✓ Booking oprettet!")
+        print(f"  Booking ID: {booking_id}")
+        print(f"  URL: {VENJUE_BASE_URL.replace('/api/v1', '')}/booking.php?eventId={booking_id}")
+        
+        # 4. Gem mapping
+        save_mapping(event_id, booking_id)
+        
+        return {
+            "status": "success",
+            "message": "Booking created successfully",
+            "event_id": event_id,
+            "booking_id": booking_id,
+            "venjue_data": venjue_payload
+        }
+        
+    except Exception as e:
+        print(f"✗ FEJL: {str(e)}")
+        raise
+
 
 def handle_event_updated(event_id):
     """
     Håndter v1.event.updated webhook.
     
-    WORKAROUND: Logger opdatering men kan ikke hente data fra Understory.
+    TODO: Implementer opdatering af eksisterende booking.
+    For nu: logger opdatering.
     """
     # Check om vi har en mapping
     booking_id = get_mapping(event_id)
@@ -160,18 +291,17 @@ def handle_event_updated(event_id):
             "message": "No booking found for this event"
         }
     
-    print(f"⚠️  WORKAROUND: Event opdateret")
+    print(f"⚠️  Event opdateret")
     print(f"   Event ID: {event_id}")
     print(f"   Booking ID: {booking_id}")
-    print(f"   Note: Kan ikke hente opdateret data fra Understory (404)")
-    print(f"   Action: Opdater booking manuelt i Venjue")
+    print(f"   Note: Opdatering af bookings er ikke implementeret endnu")
     
     return {
         "status": "success",
         "message": "Event updated - manual update required in Venjue",
         "event_id": event_id,
         "booking_id": booking_id,
-        "warning": "Understory APIs unavailable - update manually"
+        "warning": "Booking update not yet implemented"
     }
 
 
@@ -184,7 +314,7 @@ def understory_webhook():
     """
     Hovedendpoint for Understory webhooks.
     
-    WORKAROUND VERSION: Opretter bookings uden at kalde Understory APIs.
+    PRODUCTION VERSION: Kalder Understory API med korrekte headers.
     """
     try:
         # Parse webhook payload
@@ -244,14 +374,14 @@ def health():
     """Health check endpoint."""
     return jsonify({
         "status": "healthy",
-        "service": "Understory to Venjue Webhook (WORKAROUND)",
+        "service": "Understory to Venjue Webhook - PRODUCTION",
         "timestamp": datetime.now().isoformat(),
         "supported_webhooks": [
             "v1.event.created",
             "v1.event.updated"
         ],
-        "warning": "Using defaults - Understory APIs return 404",
-        "note": "Bookings created with tomorrow's date, 19:00, pax=0"
+        "api_implementation": "Correct headers + scope (event.read)",
+        "note": "Using Understory Events API with proper OAuth and headers"
     }), 200
 
 
@@ -271,7 +401,7 @@ def mappings():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("UNDERSTORY → VENJUE WEBHOOK SERVER (WORKAROUND)")
+    print("UNDERSTORY → VENJUE WEBHOOK SERVER - PRODUCTION")
     print("=" * 60)
     print()
     print(f"Database: {MAPPING_DB}")
@@ -279,13 +409,9 @@ if __name__ == '__main__':
     print(f"Health check: /health")
     print(f"View mappings: /mappings")
     print()
-    print("⚠️  WORKAROUND MODE:")
-    print("   - Understory APIs returnerer 404")
-    print("   - Bookings oprettes med defaults:")
-    print("     * Dato: I morgen")
-    print("     * Tid: 19:00")
-    print("     * Pax: 0")
-    print("   - HUSK at opdatere manuelt i Venjue!")
+    print("✓ OAuth scope: event.read")
+    print("✓ Headers: Accept + User-Agent (REQUIRED)")
+    print("✓ API: https://api.understory.io/v1/events/{eventId}")
     print()
     print("Serveren starter...")
     print("=" * 60)
