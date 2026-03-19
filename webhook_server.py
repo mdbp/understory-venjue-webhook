@@ -149,10 +149,14 @@ def extract_venjue_data(event_data):
     start_time = session["start_time"]  # String: "YYYY-MM-DDTHH:MM:SS"
     
     # Split til date og time
-    date_part, time_part = start_time.split("T")  # "2024-01-15", "10:00:00"
+    date_part, time_part = start_time.split("T")  # "DD-MM-YYYY" Danish format, "10:00:00"
     
     # Extract time without seconds
     time_hh_mm = time_part[:5]  # "10:00"
+
+    # Convert date from YYYY-MM-DD to DD-MM-YYYY (Venjue Danish format!)
+    year, month, day = date_part.split("-")
+    date_danish = f"{day}-{month}-{year}"  # "19-03-2026"
     
     # Get capacity (available seats = total - reserved)
     capacity_total = event_data["capacity"]["total"]
@@ -160,7 +164,7 @@ def extract_venjue_data(event_data):
     available_seats = capacity_total - capacity_reserved
     
     return {
-        "date": date_part,      # "2024-01-15"
+        "date": date_danish,      # "DD-MM-YYYY" Danish format
         "time": time_hh_mm,     # "10:00"
         "pax": available_seats  # integer
     }
