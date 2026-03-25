@@ -129,7 +129,7 @@ def get_experience_data(experience_id):
     """
     Hent experience data fra Understory API.
     """
-    token = get_access_token()
+    token = get_understory_token()
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
