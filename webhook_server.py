@@ -194,7 +194,7 @@ def create_venjue_booking(payload):
         result = response.json()
         print(f"✓ Venjue response: {result}")
         
-        booking_id = result.get("id")
+        booking_id = result.get("booking", {}).get("id")
         return booking_id
         
     except requests.exceptions.RequestException as e:
