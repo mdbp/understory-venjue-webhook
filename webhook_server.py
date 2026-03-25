@@ -150,7 +150,7 @@ def get_experience_data(experience_id):
     return data
 
 
-def extract_venjue_data(event_data, experience_name="Braunstein Event"):
+def extract_venjue_data(event_data, experience_name="Understory Event"):
     """
     Extract date, time, pax fra Understory event data.
     
@@ -281,12 +281,12 @@ def handle_event_created(event_id):
         if experience_id:
             try:
                 experience_data = get_experience_data(experience_id)
-                experience_name = experience_data.get("name", "Braunstein Event")
+                experience_name = experience_data.get("name", "Understory Event")
             except Exception as e:
                 print(f"⚠️  Kunne ikke hente experience navn: {e}")
-                experience_name = "Braunstein Event"
+                experience_name = "Understory Event"
         else:
-            experience_name = "Braunstein Event"
+            experience_name = "Understory Event"
         
 
         venjue_payload = extract_venjue_data(event_data, experience_name)
