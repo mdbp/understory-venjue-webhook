@@ -64,7 +64,7 @@ def get_understory_token():
         "client_id": UNDERSTORY_CLIENT_ID,
         "client_secret": UNDERSTORY_CLIENT_SECRET,
         "audience": "https://api.understory.io",
-        "scope": "event.read experience.read"  # ← Korrekt scope ifølge docs
+        "scope": "event.read"  # ← Korrekt scope ifølge docs
     }
     
     headers = {
@@ -279,8 +279,12 @@ def handle_event_created(event_id):
         # 1.5. Hent experience data for event navn
         experience_id = event_data.get("experience_id")
         if experience_id:
-            experience_data = get_experience_data(experience_id)
-            experience_name = experience_data.get("name", "Braunstein Event")
+            try:
+                experience_data = get_experience_data(experience_id)
+                experience_name = experience_data.get("name", "Braunstein Event")
+            except Exception as e:
+                print(f"⚠️  Kunne ikke hente experience navn: {e}")
+                experience_name = "Braunstein Event"
         else:
             experience_name = "Braunstein Event"
         
