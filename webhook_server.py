@@ -64,7 +64,7 @@ def get_understory_token():
         "client_id": UNDERSTORY_CLIENT_ID,
         "client_secret": UNDERSTORY_CLIENT_SECRET,
         "audience": "https://api.understory.io",
-        "scope": "event.read"  # ← Korrekt scope ifølge docs
+        "scope": "event.read experience.read"  # ← Korrekt scope ifølge docs
     }
     
     headers = {
