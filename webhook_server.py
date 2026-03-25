@@ -124,8 +124,33 @@ def get_event_data(event_id):
     return response.json()
 
 
-def extract_venjue_data(event_data):
-    print(f"📋 Event data structure: {event_data}")
+
+def get_experience_data(experience_id):
+    """
+    Hent experience data fra Understory API.
+    """
+    token = get_access_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "Braunstein-Venjue-Integration/1.0"
+    }
+    
+    url = f"{UNDERSTORY_API_BASE}/experiences/{experience_id}"
+    print(f"  → Kalder Understory API: {url}")
+    
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 404:
+        raise Exception(f"Experience {experience_id} not found")
+    
+    response.raise_for_status()
+    data = response.json()
+    print(f"✓ Experience data hentet! Name: {data.get("name", "N/A")}")
+    return data
+
+
+def extract_venjue_data(event_data, experience_name="Braunstein Event"):
     """
     Extract date, time, pax fra Understory event data.
     
@@ -165,7 +190,7 @@ def extract_venjue_data(event_data):
         "date": date_part,      # "DD-MM-YYYY" Danish format
         "time": time_hh_mm,     # "10:00"
         "pax": available_seats,  # integer
-        "title": "Braunstein Event",
+        "title": experience_name,
         "customer": {"email": CUSTOMER_EMAIL, "phone": "56791212", "firstName": "Braunstein", "lastName": "Event"}
     }
 
@@ -251,7 +276,16 @@ def handle_event_created(event_id):
         print(f"  Sessions: {len(event_data['sessions'])}")
         
         # 2. Extract Venjue data
-        venjue_payload = extract_venjue_data(event_data)
+        # 1.5. Hent experience data for event navn
+        experience_id = event_data.get("experience_id")
+        if experience_id:
+            experience_data = get_experience_data(experience_id)
+            experience_name = experience_data.get("name", "Braunstein Event")
+        else:
+            experience_name = "Braunstein Event"
+        
+
+        venjue_payload = extract_venjue_data(event_data, experience_name)
         print(f"✓ Venjue payload: {venjue_payload}")
         
         # 3. Opret booking i Venjue
