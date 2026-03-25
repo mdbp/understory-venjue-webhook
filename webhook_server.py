@@ -136,7 +136,7 @@ def get_experience_data(experience_id):
         "User-Agent": "Braunstein-Venjue-Integration/1.0"
     }
     
-    url = f"{UNDERSTORY_API_BASE}/experiences/{experience_id}"
+    url = f"https://api.understory.io/v1/experiences/{experience_id}"
     print(f"  → Kalder Understory API: {url}")
     
     response = requests.get(url, headers=headers)
