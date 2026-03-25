@@ -192,6 +192,7 @@ def create_venjue_booking(payload):
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
         result = response.json()
+        print(f"✓ Venjue response: {result}")
         
         booking_id = result.get("id")
         return booking_id
