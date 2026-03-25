@@ -125,6 +125,7 @@ def get_event_data(event_id):
 
 
 def extract_venjue_data(event_data):
+    print(f"📋 Event data structure: {event_data}")
     """
     Extract date, time, pax fra Understory event data.
     
